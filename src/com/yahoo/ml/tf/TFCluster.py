@@ -149,16 +149,24 @@ class TFCluster(object):
           tb_url = "http://{0}:{1}".format(node['host'], node['tb_port'])
       return tb_url
 
-def reserve(sc, num_executors, num_ps, tensorboard=False, input_mode=InputMode.TENSORFLOW, queues=['input','output']):
+def reserve(sc, num_tasks, num_ps, tensorboard=False, input_mode=InputMode.TENSORFLOW, queues=['input','output']):
     """
     Reserves ports, starts a multiprocessing.Manager per executor, and starts TensorBoard on worker/0 if requested.
     """
     logging.info("Reserving TFSparkNodes {0}".format("w/ TensorBoard" if tensorboard else ""))
-    assert num_ps < num_executors
+    assert num_ps < num_tasks
+
+    # get the number of executors on Spark cluster
+    executors = sc._conf.get("spark.executor.instances")
+    num_executors = int(executors) if executors is not None else 1
+
+    # can't have tasks more than num_executors
+    if num_tasks > num_executors:
+        raise Exception("The number of tasks {0} should be less than or equal to the number executors {1} on Spark cluster.".format(num_tasks, num_executors))
 
     # build a cluster_spec template using worker_nums
     spec = {}
-    for i in range(num_executors):
+    for i in range(num_tasks):
         if i < num_ps:
             nodes = [] if 'ps' not in spec else spec['ps']
             nodes.append(i)
@@ -178,7 +186,7 @@ def reserve(sc, num_executors, num_ps, tensorboard=False, input_mode=InputMode.T
     cluster.sc = sc
     cluster.defaultFS = sc._jsc.hadoopConfiguration().get("fs.defaultFS")
     cluster.working_dir = os.getcwd()
-    cluster.nodeRDD = sc.parallelize(range(num_executors), num_executors)
+    cluster.nodeRDD = sc.parallelize(range(num_tasks), num_tasks)
     cluster.cluster_info = cluster.nodeRDD.mapPartitions(TFSparkNode.reserve(spec, tensorboard, queues)).collect()
     cluster.input_mode = input_mode
     cluster.queues = queues
